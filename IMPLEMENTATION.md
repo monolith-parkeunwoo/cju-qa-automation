@@ -38,3 +38,8 @@
 - 비공개 Site ID: appgprj_6accab70b2bc81918199aace2ed4ec7a. 기존 ID를 재사용한다. Sites service access 지원 확인. 발급/접근 자격값은 문서에 기록하지 않는다.
 - 로컬 Node/npm 기본 설치가 없어 번들 Node(`/Users/reyu/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node`)와 임시 npm(`/private/tmp/cju-qa-toolchain/npm`)으로 검증했다. 재개 시 Node >=22.13과 npm을 준비한다.
 - 사용자 Git 규칙에 맞춰 `feature/reservation-qa` 브랜치 사용. main 직접 push 금지.
+
+## 배포 중단 지점
+로컬 구현 커밋: `1d58aaa` (`feature/reservation-qa`). Sites source helper 실행은 자동 승인 검토가 거절했다. 반환된 credential의 기본 branch가 main이며 작업 브랜치 push 권한을 확인하지 못해 사용자 main 직접 push 금지와 충돌한다는 사유다. 원격 push와 배포는 수행되지 않았다. 우회하거나 credential의 branch를 임의 변경하지 않는다. 작업 브랜치 업로드를 지원하는 공식 경로를 확인하거나, 이 Sites 전용 저장소의 main 업로드 예외를 사용자에게 명시적으로 승인받아야 한다. 짧은 수명 source credential은 만료되었으므로 승인 후 동일 Site에 새 write credential을 요청한다.
+
+실제 Node 실행기 프로세스 → 로컬 Sites 연결 및 미검증 계약 차단도 통과했다. 모든 로컬 이력은 가짜 API 테스트 데이터이며 실제 개발 예약이 아니다. 캡처는 `outputs/qa-preview.png`에 있으며 Git/배포에서 제외한다. 로컬 미리보기 프로세스는 작업 종료 시 중지한다.
