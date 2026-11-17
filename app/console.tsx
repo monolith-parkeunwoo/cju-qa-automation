@@ -1,5 +1,8 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
+import { kstDate,canReserveSlot } from "../packages/contracts/availability";
+import type { AvailabilitySnapshot } from "../packages/contracts/availability";
+import RacePanel from "./race-panel";
 import {
   ArrowUpRight,
   Check,
@@ -13,6 +16,14 @@ import {
 import { labels, steps } from "../packages/contracts";
 import type { Status, Profile } from "../packages/contracts";
 type Run = {
+  raceStatus: Status | null;
+  raceStep: number | null;
+  raceState: string | null;
+  raceReason: string | null;
+  ticketStatus: Status | null;
+  ticketReason: string | null;
+  wearables: string | null;
+  profileVersion: string;
   profile: string | null;
   id: string;
   input: string;
@@ -41,11 +52,35 @@ export default function Console() {
     [connected, setConnected] = useState(false),
     [selected, setSelected] = useState<string | null>(null),
     [tab, setTab] = useState("reservation"),
-    [date, setDate] = useState(""),
+    [date, setDate] = useState(() => kstDate()),
     [time, setTime] = useState(""),
     [quantity, setQuantity] = useState(1),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [availability,setAvailability]=useState<AvailabilitySnapshot|null>(null);
+  const [slotState,setSlotState]=useState("WAITING");
+  const [clock,setClock]=useState(Date.now());
+  const matchingAvailability=availability?.date===date && availability?.quantity===quantity ? availability : null;
+  const slotReady=!!matchingAvailability && slotState==="SUCCESS" && canReserveSlot(matchingAvailability,{date,time,quantity},matchingAvailability.price,clock);
+  const price=matchingAvailability?.price ?? profile?.price;
+  useEffect(()=>{const timer=setInterval(()=>setClock(Date.now()),1000);return()=>clearInterval(timer);},[]);
+  useEffect(()=>{
+    let cancelled=false;let timer:ReturnType<typeof setTimeout>;
+    setAvailability(null);setTime("");setSlotState("WAITING");
+    if(!connected || !date || !Number.isInteger(quantity) || quantity<1 || quantity>20) return;
+    async function load(){
+      try {
+        const response=await fetch("/api/availability",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({date,quantity}),signal:AbortSignal.timeout(10000)});
+        if(!response.ok) throw Error();
+        const data=await response.json() as {state:string;snapshot:AvailabilitySnapshot|null};
+        if(cancelled) return;
+        setSlotState(data.state);setAvailability(data.snapshot);
+        if(data.snapshot) setTime(previous=>data.snapshot!.slots.some(s=>s.time===previous&&s.enabled)?previous:(data.snapshot!.slots.find(s=>s.enabled)?.time??""));
+      }catch{if(!cancelled){setSlotState("FAILURE");setAvailability(null);setTime("");}}
+      if(!cancelled) timer=setTimeout(()=>void load(),3000);
+    }
+    void load();return()=>{cancelled=true;clearTimeout(timer);};
+  },[date,quantity,connected]);
   const key = useRef<string | null>(null),
     lock = useRef(false);
   const active = runs.find((r) => r.id === selected);
@@ -78,7 +113,7 @@ export default function Console() {
     return () => clearInterval(i);
   }, []);
   async function run() {
-    if (lock.current) return;
+    if (lock.current || !slotReady) return;
     lock.current = true;
     setBusy(true);
     setError("");
@@ -99,6 +134,7 @@ export default function Console() {
         throw Error(
           v.error === "RUN_BUSY"
             ? "다른 예약을 실행하고 있습니다."
+            : v.error === "AVAILABILITY_STALE" ? "예약 가능 시간이 갱신되었습니다. 최신 조회 후 다시 선택해 주세요."
             : "입력값과 예약 조건을 확인해 주세요.",
         );
       }
@@ -115,6 +151,40 @@ export default function Console() {
       lock.current = false;
       setBusy(false);
     }
+  }
+  async function requestTickets(id: string) {
+    setError("");
+    try {
+      const r = await fetch(`/api/runs/${id}/ticket`, { method: "POST" });
+      if (!r.ok)
+        throw Error(
+          "가상 발권을 요청하지 못했습니다. 실행 상태를 확인해 주세요.",
+        );
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "발권 요청 실패");
+    }
+  }
+  function wearableCell(r: Run) {
+    const items = r.wearables
+      ? (JSON.parse(r.wearables) as { wearableId: string; verified: boolean }[])
+      : [];
+    return (
+      <>
+        {items.map((w) => (
+          <div key={w.wearableId}>
+            <code>{w.wearableId}</code>
+            <small>
+              {w.verified ? "티켓 조회 검증 완료" : "조회 확인 필요"}
+            </small>
+          </div>
+        ))}
+        {items.length === 0 && (
+          <span>{r.ticketStatus ? labels[r.ticketStatus] : "미발권"}</span>
+        )}
+        {r.ticketStatus && <small>발권: {labels[r.ticketStatus]}</small>}
+      </>
+    );
   }
   return (
     <div className="shell">
@@ -214,8 +284,8 @@ export default function Console() {
                     </p>
                   </div>
                   <b>
-                    {profile?.price != null
-                      ? `${profile.price.toLocaleString()}원`
+                    {price != null
+                      ? `${price.toLocaleString()}원`
                       : "미확정"}
                   </b>
                 </div>
@@ -230,6 +300,7 @@ export default function Console() {
                     <input
                       aria-label="예약일"
                       type="date"
+                      min={kstDate(new Date(clock))}
                       required
                       value={date}
                       disabled={busy || !!key.current}
@@ -240,20 +311,22 @@ export default function Console() {
                     <label>
                       예약 시간
                       <select
+                        aria-label="예약 시간"
                         required
                         value={time}
-                        disabled={busy || !!key.current}
+                        disabled={busy || !!key.current || slotState!=="SUCCESS" || !matchingAvailability}
                         onChange={(e) => setTime(e.target.value)}
                       >
-                        <option value="">시간 선택</option>
-                        {profile?.times.map((t) => (
-                          <option key={t}>{t}</option>
+                        <option value="">{slotState==="FAILURE"?"조회 실패":slotState!=="SUCCESS"?"예약 가능 시간 조회 중…":matchingAvailability?.slots.some(s=>s.enabled)?"시간 선택":"예약 가능한 시간 없음"}</option>
+                        {matchingAvailability?.slots.map((s) => (
+                          <option key={s.time} value={s.time} disabled={!s.enabled}>{s.time}{s.enabled?" · 예약 가능":" · 예약 불가"}</option>
                         ))}
                       </select>
                     </label>
                     <label>
                       수량
                       <input
+                        aria-label="수량"
                         type="number"
                         min="1"
                         max="20"
@@ -264,17 +337,25 @@ export default function Console() {
                       />
                     </label>
                   </div>
+                  <div className="availability-note" aria-live="polite">
+                    <strong>현재 한국 시간 {new Date(clock).toLocaleTimeString("ko-KR",{timeZone:"Asia/Seoul",hour12:false})}</strong>
+                    {slotState==="FAILURE" ? <p>개발 재고 조회에 실패했습니다. 연결 확인 후 자동으로 다시 조회합니다.</p>
+                      : matchingAvailability ? <><p>{date} · {quantity}매 기준 {matchingAvailability.slots.filter(s=>s.enabled).length}개 시간 예약 가능 · 조회 {new Date(matchingAvailability.checkedAt).toLocaleTimeString("ko-KR",{timeZone:"Asia/Seoul",hour12:false})}</p>
+                      <p>{matchingAvailability.slots.some(s=>s.enabled) ? "실제 예약 가능 시간만 선택할 수 있습니다." : "이 날짜·수량에는 예약 가능한 시간이 없습니다."}</p></>
+                      : <p>선택한 날짜·수량으로 개발 재고 API를 조회하고 있습니다.</p>}
+                    <p>예약·발권 가능 여부와 레이스 입장 시간은 별도입니다. 발권 후 레이스 조건 확인에서 실제 입장 가능 여부를 검증합니다.</p>
+                  </div>
                   <div className="summary">
                     <span>예상 합계</span>
                     <strong>
-                      {profile?.price != null
-                        ? `${(profile.price * quantity).toLocaleString()}원`
+                      {price != null
+                        ? `${(price * quantity).toLocaleString()}원`
                         : "—"}
                     </strong>
                   </div>
                   <button
                     className="primary"
-                    disabled={!ready || busy || !date || !time}
+                    disabled={!ready || busy || !slotReady}
                   >
                     <Play size={16} />
                     {busy ? "실행 요청 중…" : "예약 검증 실행"}
@@ -337,11 +418,28 @@ export default function Console() {
                       ))}
                     </ol>
                     <dl>
-                      <dt>주문번호</dt>
-                      <dd>{active.orderId ?? "미확보"}</dd>
                       <dt>예약번호</dt>
                       <dd>{active.reservationId ?? "미확보"}</dd>
+                      <dt>주문번호</dt>
+                      <dd>{active.orderId ?? "미확보"}</dd>
+                      <dt>wearableId</dt>
+                      <dd>{wearableCell(active)}</dd>
                     </dl>
+                    {active.status === "SUCCESS" &&
+                      !active.ticketStatus &&
+                      active.profileVersion?.startsWith("dev-live-") && (
+                        <button
+                          className="primary"
+                          onClick={() => void requestTickets(active.id)}
+                        >
+                          가상 발권 실행
+                        </button>
+                      )}
+                    {active.ticketReason && (
+                      <p className="result-note">
+                        발권: {reasons[active.ticketReason]}
+                      </p>
+                    )}
                     {active.reason && (
                       <p className="result-note">{reasons[active.reason]}</p>
                     )}
@@ -359,7 +457,7 @@ export default function Console() {
                     <p>
                       예약을 실행하면 단계별 진행 상황과
                       <br />
-                      주문·예약번호를 여기서 확인할 수 있습니다.
+                      예약·주문번호를 여기서 확인할 수 있습니다.
                     </p>
                     <div className="flow">
                       조건 확인 → 주문 생성 → 완료 → 재조회
@@ -368,6 +466,14 @@ export default function Console() {
                 )}
               </section>
             </div>
+          )}
+          {active?.ticketStatus === "SUCCESS" && (
+            <RacePanel
+              key={active.id}
+              run={active}
+              connected={connected}
+              refresh={refresh}
+            />
           )}
           <section className="card history">
             <div className="card-title">
@@ -381,8 +487,9 @@ export default function Console() {
                     <tr>
                       <th>실행 시각</th>
                       <th>예약 조건</th>
-                      <th>주문 / 예약번호</th>
-                      <th>상태</th>
+                      <th>예약 / 주문번호</th>
+                      <th>wearableId</th>
+                      <th>단계 상태</th>
                       <th />
                     </tr>
                   </thead>
@@ -395,15 +502,22 @@ export default function Console() {
                           <td>
                             {i.date} {i.time}
                             <small>ALL · {i.quantity}매</small>
+                            <small>
+                              {r.profileVersion?.startsWith("dev-live-")
+                                ? "개발 API 실제 실행"
+                                : "로컬 테스트 데이터"}
+                            </small>
                           </td>
                           <td>
-                            {r.orderId ?? "—"}
-                            <small>{r.reservationId ?? "미확보"}</small>
+                            {r.reservationId ?? "미확보"}
+                            <small>{r.orderId ?? "—"}</small>
                           </td>
+                          <td>{wearableCell(r)}</td>
                           <td>
                             <span className={`badge ${r.status}`}>
-                              {labels[r.status]}
+                              예약: {labels[r.status]}
                             </span>
+                            {r.raceStatus && <small>레이스: {labels[r.raceStatus]}</small>}
                           </td>
                           <td>
                             <button

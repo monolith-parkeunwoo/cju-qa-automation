@@ -1,5 +1,13 @@
+import { availabilitySnapshotSchema } from "../../../packages/contracts/availability";
+import { claimAvailability, reportAvailability } from "../../../lib/availability";
+import { raceReportSchema } from "../../../packages/contracts/race";
+import { claimRace, reportRace } from "../../../lib/race-queue";
 import { z } from "zod";
-import { profileSchema, reportSchema } from "../../../packages/contracts";
+import {
+  profileSchema,
+  reportSchema,
+  ticketReportSchema,
+} from "../../../packages/contracts";
 import { runnerAuthorized, json, body, db, expire } from "../../../lib/server";
 export async function POST(r: Request) {
   if (!(await runnerAuthorized(r))) return json({ error: "FORBIDDEN" }, 403);
@@ -7,8 +15,31 @@ export async function POST(r: Request) {
   try {
     b = z
       .discriminatedUnion("action", [
+        z.object({action:z.literal("availabilityReport"),key:z.string().max(40),token:z.string().uuid(),snapshot:availabilitySnapshotSchema.nullable()}).strict(),
         z
-          .object({ action: z.literal("poll"), profile: profileSchema })
+          .object({
+            action: z.literal("raceReport"),
+            id: z.string().uuid(),
+            token: z.string().uuid(),
+            report: raceReportSchema,
+          })
+          .strict(),
+        z
+          .object({
+            action: z.literal("ticketReport"),
+            id: z.string().uuid(),
+            token: z.string().uuid(),
+            report: ticketReportSchema,
+          })
+          .strict(),
+        z
+          .object({
+            action: z.literal("poll"),
+            profile: profileSchema,
+            ticketing: z.boolean().optional(),
+            racing: z.boolean().optional(),
+            availability: z.boolean().optional(),
+          })
           .strict(),
         z
           .object({
@@ -25,6 +56,29 @@ export async function POST(r: Request) {
   }
   await expire();
   const now = Date.now();
+  if(b.action === "availabilityReport") return reportAvailability(b.key,b.token,b.snapshot);
+  if (b.action === "raceReport") return reportRace(b.id, b.token, b.report);
+  if (b.action === "ticketReport") {
+    const v = b.report;
+    const result = await db()
+      .prepare(
+        "UPDATE runs SET ticket_status=?,ticket_reason=?,wearables=?,slot=?,updated=? WHERE id=? AND token=? AND status='SUCCESS' AND ticket_status='RUNNING'",
+      )
+      .bind(
+        v.status,
+        v.reason ?? null,
+        JSON.stringify(v.wearables),
+        v.status === "RUNNING" ? 1 : null,
+        now,
+        b.id,
+        b.token,
+      )
+      .run();
+    return json(
+      { accepted: result.meta.changes === 1 },
+      result.meta.changes === 1 ? 200 : 409,
+    );
+  }
   if (b.action === "poll") {
     await db()
       .prepare(
@@ -38,16 +92,47 @@ export async function POST(r: Request) {
       )
       .bind(now, b.profile.version, b.profile.ready ? 1 : 0)
       .run();
+    if (b.racing) {
+      const race = await claimRace(b.profile.version);
+      if (race) return json({ job: race });
+    }
+    const ticketToken = crypto.randomUUID();
+    const ticketJob = b.ticketing
+      ? await db()
+          .prepare(
+            "UPDATE runs SET ticket_status='RUNNING',token=?,updated=? WHERE id=(SELECT id FROM runs WHERE ticket_status='WAITING' AND status='SUCCESS' AND profile_version=? ORDER BY updated LIMIT 1) AND ticket_status='WAITING' RETURNING id,input,profile_version AS profileVersion,order_id AS orderId,reservation_id AS reservationId",
+          )
+          .bind(ticketToken, now, b.profile.version)
+          .first<{
+            id: string;
+            input: string;
+            profileVersion: string;
+            orderId: string;
+            reservationId: string;
+          }>()
+      : null;
+    if (ticketJob)
+      return json({
+        job: {
+          ...ticketJob,
+          input: JSON.parse(ticketJob.input),
+          token: ticketToken,
+          kind: "ticketing",
+        },
+      });
+    if(b.availability) {const availability=await claimAvailability();if(availability) return json({job:null,availability});}
     if (!b.profile.ready) return json({ job: null });
     const token = crypto.randomUUID();
     const job = await db()
       .prepare(
-        "UPDATE runs SET status='RUNNING',token=?,updated=? WHERE id=(SELECT id FROM runs WHERE status='WAITING' AND profile_version=? ORDER BY created LIMIT 1) AND status='WAITING' RETURNING id,input,profile_version AS profileVersion",
+        "UPDATE runs SET status='RUNNING',token=?,updated=? WHERE id=(SELECT id FROM runs WHERE status='WAITING' AND profile_version=? ORDER BY created LIMIT 1) AND status='WAITING' RETURNING id,input,profile_version AS profileVersion,profile_snapshot AS profile",
       )
       .bind(token, now, b.profile.version)
-      .first<{ id: string; input: string; profileVersion: string }>();
+      .first<{ id: string; input: string; profileVersion: string;profile:string }>();
     return json({
-      job: job ? { ...job, input: JSON.parse(job.input), token } : null,
+      job: job
+        ? { id:job.id,profileVersion:job.profileVersion,price:JSON.parse(job.profile).price,input:JSON.parse(job.input),token,kind:"reservation" }
+        : null,
     });
   }
   const v = b.report;

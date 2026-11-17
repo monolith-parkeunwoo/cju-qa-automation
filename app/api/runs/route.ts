@@ -1,3 +1,4 @@
+import { availabilitySnapshotSchema,canReserveSlot,kstDate } from "../../../packages/contracts/availability";
 import { z } from "zod";
 import { inputSchema } from "../../../packages/contracts";
 import {
@@ -48,10 +49,12 @@ export async function POST(r: Request) {
   if (
     !connected ||
     !profile?.ready ||
-    profile.version !== b.profileVersion ||
-    !profile.times.includes(b.input.time)
+    profile.version !== b.profileVersion
   )
     return json({ error: "NOT_READY" }, 409);
+  const slotRow=await db().prepare("SELECT snapshot FROM availability WHERE key=? AND state='SUCCESS'").bind(`${b.input.date}:${b.input.quantity}`).first<{snapshot:string}>();
+  const snapshot=availabilitySnapshotSchema.safeParse(slotRow?JSON.parse(slotRow.snapshot):null);
+  if(b.input.date<kstDate() || !snapshot.success || snapshot.data.productId!==profile.productId || !canReserveSlot(snapshot.data,b.input,snapshot.data.price)) return json({error:"AVAILABILITY_STALE"},409);
   const id = crypto.randomUUID(),
     now = Date.now();
   try {
@@ -65,7 +68,7 @@ export async function POST(r: Request) {
         b.key,
         JSON.stringify(b.input),
         profile.version,
-        JSON.stringify(profile),
+        JSON.stringify({...profile,price:snapshot.data.price}),
         now,
         now,
       )

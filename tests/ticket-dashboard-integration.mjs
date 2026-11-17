@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+const base = "http://127.0.0.1:5173";
+const record = JSON.parse(await readFile(new URL("../outputs/development-2026-10-13.json", import.meta.url), "utf8"));
+const token = (await readFile(new URL("../.dev.vars", import.meta.url), "utf8")).match(/^QA_RUNNER_TOKEN=(.+)$/m)[1];
+let cookie = "";
+async function req(path, body, extra = {}) {
+  return fetch(base + path, { method: body === undefined ? "GET" : "POST", redirect: "manual", headers: { "Content-Type": "application/json", Origin: base, Cookie: cookie, ...extra }, body: body === undefined ? undefined : JSON.stringify(body) });
+}
+const path = `/api/runs/${record.id}/ticket`;
+assert.equal((await req(path, {})).status, 403);
+const login = await fetch(base + "/signin-with-chatgpt?return_to=/", {redirect:"manual"});
+cookie = login.headers.getSetCookie().map(v=>v.split(";")[0]).join("; ");
+const before = await (await req("/api/runs")).json();
+const run = before.runs.find(r=>r.id===record.id);
+assert.equal(run.status, "SUCCESS");
+assert.equal(run.ticketStatus, "SUCCESS");
+assert.equal(run.orderId, "125499");
+assert.equal(run.reservationId, "596B55B24212");
+const wearables = JSON.parse(run.wearables);
+assert.equal(wearables[0].wearableId, "2610131118629");
+assert.equal(wearables[0].verified, true);
+assert.ok(!JSON.stringify(before).includes(token));
+assert.equal((await req(path, {}, {Origin:"https://untrusted.invalid"})).status, 403);
+const duplicate = await req(path, {});
+assert.equal(duplicate.status, 200);
+assert.equal((await duplicate.json()).status, "SUCCESS");
+const fixture = before.runs.find(r=>r.status==="SUCCESS" && !r.profileVersion.startsWith("dev-live-"));
+assert.ok(fixture);
+assert.equal((await req(`/api/runs/${fixture.id}/ticket`, {})).status, 409);
+assert.equal((await req("/api/runner", {action:"ticketReport",id:run.id,token:crypto.randomUUID(),report:{status:"RUNNING",wearables:[]}}, {"x-qa-runner-token":token})).status,409);
+const after = await (await req("/api/runs")).json();
+assert.deepEqual(after.runs.find(r=>r.id===record.id),run);
+console.log("PASS: verified live result, authorization, CSRF, duplicate issuance guard, fixture guard, stale report rejection; no new API mutations");

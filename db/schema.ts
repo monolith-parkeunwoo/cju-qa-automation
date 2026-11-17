@@ -17,6 +17,13 @@ export const runs = sqliteTable(
     step: integer("step").notNull().default(0),
     orderId: text("order_id"),
     reservationId: text("reservation_id"),
+    ticketStatus: text("ticket_status"),
+    ticketReason: text("ticket_reason"),
+    wearables: text("wearables"),
+    raceStatus: text("race_status"),
+    raceStep: integer("race_step"),
+    raceState: text("race_state"),
+    raceReason: text("race_reason"),
     checks: text("checks"),
     reason: text("reason"),
     token: text("token"),
@@ -29,6 +36,10 @@ export const runs = sqliteTable(
     uniqueIndex("single_active_run").on(t.slot),
   ],
 );
+export const availability = sqliteTable("availability", {
+ key:text("key").primaryKey(),date:text("date").notNull(),quantity:integer("quantity").notNull(),
+ state:text("state").notNull(),snapshot:text("snapshot"),token:text("token"),updated:integer("updated").notNull(),
+});
 export const runner = sqliteTable("runner", {
   id: integer("id").primaryKey(),
   profile: text("profile").notNull(),

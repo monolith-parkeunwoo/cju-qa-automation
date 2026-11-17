@@ -37,10 +37,26 @@ export async function body(r: Request) {
   return JSON.parse(t);
 }
 export async function expire() {
+  await expireTickets();
+  await db()
+    .prepare(
+      "UPDATE runs SET race_status='NEEDS_REVIEW',race_reason='RUNNER_LOST',slot=NULL,updated=? WHERE race_status='RUNNING' AND updated<?",
+    )
+    .bind(Date.now(), Date.now() - 90000)
+    .run();
   const now = Date.now();
   await db()
     .prepare(
       "UPDATE runs SET status='NEEDS_REVIEW',reason='RUNNER_LOST',slot=NULL,updated=? WHERE status='RUNNING' AND updated<?",
+    )
+    .bind(now, now - 90000)
+    .run();
+}
+export async function expireTickets() {
+  const now = Date.now();
+  await db()
+    .prepare(
+      "UPDATE runs SET ticket_status='NEEDS_REVIEW',ticket_reason='RUNNER_LOST',slot=NULL,updated=? WHERE ticket_status='RUNNING' AND updated<?",
     )
     .bind(now, now - 90000)
     .run();
@@ -55,4 +71,4 @@ export async function readiness() {
   };
 }
 export const publicColumns =
-  "id,input,profile_version AS profileVersion,profile_snapshot AS profile,status,step,order_id AS orderId,reservation_id AS reservationId,checks,reason,created,updated";
+  "id,input,profile_version AS profileVersion,profile_snapshot AS profile,status,step,order_id AS orderId,reservation_id AS reservationId,ticket_status AS ticketStatus,ticket_reason AS ticketReason,wearables,race_status AS raceStatus,race_step AS raceStep,race_state AS raceState,race_reason AS raceReason,checks,reason,created,updated";

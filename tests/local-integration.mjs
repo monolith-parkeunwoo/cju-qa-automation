@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import assert from "node:assert/strict";
+if(process.env.QA_FIXTURE_TEST !== "true") throw Error("Use an isolated local database and stop the development runner; set QA_FIXTURE_TEST=true explicitly");
 const base = process.env.QA_TEST_URL ?? "http://127.0.0.1:5173";
 if (!["localhost", "127.0.0.1"].includes(new URL(base).hostname))
   throw Error("Local tests only");
@@ -33,10 +34,12 @@ cookie = login.headers
   .map((v) => v.split(";")[0])
   .join("; ");
 assert.equal((await req("/api/runs")).status, 200);
+const initial=await(await req("/api/runs")).json();
+assert.ok(!initial.profile?.version?.startsWith("dev-live-"),"Do not run fixtures against the live development dashboard");
 const profile = {
   version: "local-fixture-only-v1",
   ready: true,
-  productId: "fixture-all",
+  productId: "116",
   productName: "ALL",
   price: 100,
   times: ["10:00"],
@@ -45,7 +48,11 @@ const profile = {
 const runner = (body) =>
   req("/api/runner", body, { "x-qa-runner-token": token });
 assert.equal((await runner({ action: "poll", profile })).status, 200);
-const input = { date: "2026-12-10", time: "10:00", quantity: 2 };
+const input = { date: "2099-12-10", time: "10:00", quantity: 2 };
+assert.equal((await req("/api/availability",{date:input.date,quantity:input.quantity})).status,200);
+const availabilityJob=(await(await runner({action:"poll",profile,availability:true})).json()).availability;
+assert.ok(availabilityJob);
+assert.equal((await runner({action:"availabilityReport",key:availabilityJob.key,token:availabilityJob.token,snapshot:{date:input.date,quantity:input.quantity,productId:"116",price:100,checkedAt:Date.now(),slots:[{time:"10:00",enabled:true}]}})).status,200);
 const key = crypto.randomUUID();
 assert.equal(
   (

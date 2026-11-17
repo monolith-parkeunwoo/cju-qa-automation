@@ -64,9 +64,8 @@ export const profileSchema = z
       !p.ready ||
       (p.productId !== null &&
         p.price !== null &&
-        p.times.length > 0 &&
         p.blockers.length === 0),
-    "Ready requires verified product, price and slots",
+    "Ready requires verified product and price",
   );
 export type Profile = z.infer<typeof profileSchema>;
 export const idSchema = z.string().regex(/^[A-Za-z0-9_-]{1,100}$/);
@@ -115,8 +114,49 @@ export const reportSchema = z
         message: "Success requires complete verification",
       });
   });
+export const wearableSchema = z
+  .object({
+    wearableId: z.string().regex(/^[1-9][0-9]*$/),
+    nfcId: z.string().max(100).optional(),
+    ticketId: idSchema.optional(),
+    verified: z.boolean(),
+  })
+  .strict();
+export const ticketReportSchema = z
+  .object({
+    status: statusSchema.exclude(["WAITING"]),
+    wearables: z.array(wearableSchema).max(100),
+    reason: z
+      .enum([
+        "PRECONDITION",
+        "UNCERTAIN_MUTATION",
+        "VERIFICATION_MISMATCH",
+        "CONTRACT_ERROR",
+      ])
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (r) =>
+      new Set(r.wearables.map((w) => w.wearableId)).size === r.wearables.length,
+    "Duplicate wearable IDs",
+  )
+  .refine(
+    (r) =>
+      r.status !== "SUCCESS" ||
+      (r.wearables.length > 0 && r.wearables.every((w) => w.verified)),
+    "Ticket success requires verified IDs",
+  );
+export type Wearable = z.infer<typeof wearableSchema>;
+export type TicketReport = z.infer<typeof ticketReportSchema>;
 export type Report = z.infer<typeof reportSchema>;
 export type Job = {
+  price?: number;
+  kind?: "reservation" | "ticketing" | "race";
+  raceStep?: number;
+  raceState?: import("./race.ts").RaceState;
+  orderId?: string;
+  reservationId?: string;
   id: string;
   token: string;
   input: ReservationInput;

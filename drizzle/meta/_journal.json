@@ -15,6 +15,27 @@
       "when": 1791798909804,
       "tag": "0001_high_victor_mancha",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791857838958,
+      "tag": "0002_sleepy_beyonder",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1791866304033,
+      "tag": "0003_superb_cerebro",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1791868060947,
+      "tag": "0004_orange_lady_ursula",
+      "breakpoints": true
     }
   ]
 }
